@@ -1,0 +1,9 @@
+export DALI_CLONES="2 3"
+export DALI_DIR=netlink
+export DALI_NETWORK=zak
+export DALI_ORIGINAL=1
+export DALI_TAG=zak
+export DALI_VERBOSE=1
+export DALI_VI_LOCATION=http://seedy.us.rdlabs.hpecorp.net/Debian/dists/buster/main/installer-amd64/
+export DALI_VI_VARIANT=debiantesting
+export http_proxy=http://web-proxy.corp.hpecorp.net:8080/

@@ -1,0 +1,330 @@
+#!/bin/bash
+
+# Sounds like Dolly (a famous clone) but shorter.  Use virt-lib tools
+# to create an "ORIGINAL" VM then clone it.  Set them all up under an
+# existing virtual network.
+
+export DALI_VERBOSE=${DALI_VERBOSE:-0}
+
+# Before running, set DALI_DIR to an existing directory which will hold the
+# artifacts, and DALI_TAG to a short phrase for naming (ie, bg for BeeGFS
+# work).  DALI_TAG is used for the network name if DALI_NETWORK is not set.
+
+# DALI_ORIGINAL is the "suffix" of the first domain created with 
+# "dali.sh original".  DALI_CLONES are used during "dali.sh cloneAll"
+# or specify your own list with "dali.sh clone suff1 suff2 ..."
+
+export DALI_ORIGINAL=${DALI_ORIGINAL:-a}
+export DALI_CLONES=${DALI_CLONES:-b c d}
+export DALI_MEM_GB=${DALI_MEM_GB:-1}
+export DALI_ROOT_GB=${DALI_ROOT_GB:-4}
+export DALI_VCPUS=${DALI_VCPUS:-2}
+export DALI_VDB=${DALI_VDB:-YES}
+declare -u DALI_VDB
+
+# Leave these as-is unless you know what you're doing with virt-install.
+# See output of "osinfo-query os".
+
+export DALI_VI_FLAVOR=${DALI_VI_FLAVOR:-Debian}
+declare -l FLAVOR=$DALI_VI_FLAVOR
+case "$FLAVOR" in
+debian)
+    export DALI_VI_LOCATION=http://seedy.us.rdlabs.hpecorp.net/Debian/dists/buster/main/installer-amd64/
+    export DALI_VI_PRESEED=devstuff/preseed-buster.dali.cfg
+    export DALI_VI_VARIANT=debiantesting
+    ;;
+ubuntu)
+    export DALI_VI_LOCATION=http://seedy.us.rdlabs.hpecorp.net/Ubuntu/dists/bionic/main/installer-amd64/
+    export DALI_VI_PRESEED=devstuff/preseed-bionic.dali.cfg
+    export DALI_VI_VARIANT=ubuntu18.04
+    ;;
+*)
+    die "Flavor $DALI_VI_FLAVOR not recognized."
+    ;;
+esac
+
+# Just for completeness.
+export LIBVIRT_DEFAULT_URI=${LIBVIRT_DEFAULT_URI:-qemu:///system}
+
+###########################################################################
+
+function _die() {
+	echo "$*" >&2
+	exit 1
+}
+
+_PROGNAME=`basename $0`
+
+function _usage() {
+    # Search for functions without leading underscores as directives.
+    # Separate with a | symbol for typical "usage" syntax.  Forget <>.
+    # Two slashes mean global match not just the first one.
+    _die "usage: $_PROGNAME ${_LEGALDIRECTIVES//:/ | }"
+    exit 99
+}
+
+###########################################################################
+# Allow domain names of the form "suffixonly" or "${DALI_TAG}suffix".
+# This will break if DALI_TAG == suffix so I hereby declare anyone who
+# does such a thing to be an idiot.
+
+function _domname() {
+	[[ $1 =~ $DALI_TAG ]] && echo $1 || echo $DALI_TAG$1
+	return 0
+}
+
+###########################################################################
+# The script hangs until virt-install is complete, ie, the underlying QEMU
+# session exits.  After installation the preseed can tell the guest what to
+# do.  That interacts with both the way QEMU was started (under my control)
+# and ACPI actions in the domain XML (alter defaults with --events).  Starting 
+# --noreboot and preseed "d-i debian-installer/exit/poweroff boolean true"
+# will collapse everything and halt QEMU.
+
+function waitlsof() {
+    while sudo lsof "$1"; do
+    	echo Waiting for $1 to become free...
+	sleep 1
+    done
+}
+
+function original() {
+    # "mnt" will fail if guestmount is active.
+    MNT="`/bin/pwd`/.guestmount"
+    mkdir -p "$MNT" || _die Cannot create directory $MNT
+    [ ! -d "$MNT" ] && _die Cannot find $MNT
+    ORIGDOM=`_domname $DALI_ORIGINAL`
+    ORIGQCOW2="${DALI_DIR}/${ORIGDOM}.qcow2"
+    [ $DALI_VDB = YES ] && ORIGBLOCK="${DALI_DIR}/block${DALI_ORIGINAL}.img" ||
+    			   ORIGBLOCK=
+    virsh list --all --name | fgrep -q $ORIGDOM
+    [ $? -eq 0 ] && _die $ORIGDOM already defined.
+    [ $DALI_MEM_GB -lt 1 -o $DALI_MEM_GB -gt 8 ] && die 'Bad memory size'
+    let MEM=${DALI_MEM_GB}*1024
+    [ -f ${ORIGQCOW2} ] || \
+    	qemu-img create -f qcow2 ${ORIGQCOW2} ${DALI_ROOT_GB}G
+    if [ "$ORIGBLOCK" ]; then
+	[ -f ${ORIGBLOCK} ] || fallocate -l 512M ${ORIGBLOCK}
+    fi
+    virsh net-info ${DALI_NETWORK} >&- || exit 1	# cause on stderr
+
+    cp $DALI_VI_PRESEED "$DALI_DIR/preseed.cfg"
+
+    # Set up multi-slot memory in anticipation of NVDIMM use later.
+    # The "DRAM" here defaults to slot 0.  I can't get it to work so hand
+    # patch the DOM XML later.  A good start is
+    # --memory 1024,hotplugmemorymax=2048,hotplugmemoryslots=2
+    # but it requires at least one NUMA node definition and I can't get
+    # --cpu host-passthrough,cell0.memory=1024,cell0.cpus=0-1
+    # to work: "initrd is too large" which Googles to NOTHING.
+
+    [ -z "$ORIGBLOCK" ] && VDB= || \
+	VDB="--disk path=\"${ORIGBLOCK}\",bus=virtio,format=raw,shareable=on"
+
+    virt-install --name ${ORIGDOM} --noreboot --virt-type kvm \
+    	--vcpus $DALI_VCPUS --memory $MEM \
+	--disk path=${ORIGQCOW2},bus=virtio,format=qcow2 $VDB \
+	--network network=${DALI_NETWORK} \
+	--os-type linux \
+	--location ${DALI_VI_LOCATION} \
+	--os-variant ${DALI_VI_VARIANT} \
+	--initrd-inject=$DALI_DIR/preseed.cfg --extra-args="auto" \
+	--graphics spice --video qxl --channel spicevmc
+    [ $? -eq 0 ] || _die virt-install $ORIGDOM failed
+    waitlsof "$ORIGQCOW2"
+
+    # virt-copy-in loses control over file ownership which screws ssh, so JFDI.
+
+    sudo chown $LOGNAME "$ORIGQCOW2" || _die chown $ORIGQCOW2
+    chgrp libvirt-qemu "$ORIGQCOW2" || _die chgrp $ORIGQCOW2
+    if [ "$ORIGBLOCK" ]; then
+	sudo chown $LOGNAME "$ORIGBLOCK" || _die chown $ORIGBLOCK
+    	chgrp libvirt-qemu "$ORIGBLOCK" || _die chgrp $ORIGBLOCK
+    fi
+
+    sudo guestmount -a "$ORIGQCOW2" -m /dev/sda1 "$MNT" || _die guestmount original
+    for F in `ls --almost-all homedir`; do
+	sudo cp -r "homedir/$F" "$MNT/root"
+    done
+    sudo guestunmount "$MNT"
+    waitlsof "$ORIGQCOW2"
+    rmdir "$MNT" >&- 2>&-
+
+    # Also reruns sshd key generation based on hostname
+    # echo -n "Ready for virt-sysprep, hit enter..."
+    # read ANSWER
+    VX=
+    # export LIBGUESTFS_DEBUG=1 LIBGUESTFS_TRACE=1 VX=-vx
+    virt-sysprep $VX -d $ORIGDOM --hostname $ORIGDOM \
+	--operations dhcp-client-state,customize || _die hostname $ORIGDOM
+    return 0
+}
+
+###########################################################################
+# virt-clone walks domain disks in order (virsh dumpxml xxxxa) as
+# source for the new copies.
+
+function _dolly () {
+    SRCDOM=`_domname $1`
+    SRCSTATE=`virsh domstate $SRCDOM`
+    [ $? -ne 0 ] && _die "$SRCDOM does not exist"
+    echo $SRCSTATE | fgrep -q 'shut off' || _die "First stop $SRCDOM"
+    CLONE=`_domname $2`
+    virsh domstate $CLONE >&- 2>&- && _die "$CLONE already exists"
+    NEWQCOW2="$DALI_DIR/$CLONE.qcow2"
+    if [ "$DALI_VDB" = YES ]; then
+    	NEWBLOCK="$DALI_DIR/block$2.img"
+	VDB= "-f \"$NEWBLOCK\" --force-copy vdb"
+    else
+    	NEWBLOCK=
+	VDB=
+    fi
+    # Sometimes the chown original doesn't work (or gets reverted) and the 
+    # devices are read-only here.  By default virt-clone don't play dat.
+    virt-clone -o $SRCDOM -n $CLONE -f "$NEWQCOW2" --force-copy vda $VDB
+    [ $? -ne 0 ] && _die "virt-clone failed for $CLONE"
+    sudo chown $LOGNAME "$NEWQCOW2" "$NEWBLOCK" || _die chown $CLONE
+    chgrp libvirt-qemu "$NEWQCOW2" "$NEWBLOCK" || _die chgrp $CLONE
+    chmod +r "$NEWQCOW2" "$NEWBLOCK" || _die chmod $CLONE
+    virt-sysprep -d $CLONE --hostname $CLONE \
+	--operations dhcp-client-state,customize || _die hostname $CLONE
+}
+
+function clone() {
+    [ $# -eq 0 ] && _die "clone needs at least one argument"
+    SRC=$1
+    shift
+    if [ "$SRC" = ALL ]; then
+    	SRC=$DALI_ORIGINAL
+	DESTS="$DALI_CLONES"
+    else
+    	[ $# -gt 0 ] && DESTS="$*" || DESTS="$DALI_CLONES"
+    fi
+    for D in $DESTS; do _dolly $SRC $D; done
+    return 0
+}
+
+###########################################################################
+
+function _nukedom() {
+	DOM=`_domname $1`
+	virsh domstate $DOM >&- 2>&-
+	[ $? -ne 0 ] && echo "$DOM does not exist" && return 1
+    	echo -n "Do you REALLY want to remove \"$DOM\" (y/N)? "
+	read ANSWER
+	[ "$ANSWER" != y -a "$ANSWER" != Y ] && return 0
+    	STATE=`virsh domstate $DOM`
+	if [ $? -eq 0 ]; then
+	    echo $STATE | fgrep -q 'shut off' || _die "First stop $DOM"
+	    virsh undefine $DOM || _die undefine $DOM
+	fi
+	QCOW2="$DALI_DIR/$DOM.qcow2"
+	BLOCK="$DALI_DIR/block$1.img"
+	rm -f "$QCOW2" "$BLOCK"
+	return 0
+}
+
+function remove() {
+    [ $# -eq 0 ] && _die "remove needs at least one argument"
+    [ $1 = ALL ] && TARGETS="$DALI_CLONES" || TARGETS="$*"
+    for T in $TARGETS; do _nukedom $T; done
+    return 0
+}
+
+###########################################################################
+
+function destroy() {
+    [ $# -eq 0 ] && _die "destroy needs at least one argument"
+    [ $1 = ALL ] && TARGETS="$DALI_ORIGINAL $DALI_CLONES" || TARGETS="$*"
+    for T in $TARGETS; do virsh destroy `_domname $T`; done
+    return 0
+}
+
+function start() {
+    [ $# -eq 0 ] && _die "start needs at least one argument"
+    [ $1 = ALL ] && TARGETS="$DALI_ORIGINAL $DALI_CLONES" || TARGETS="$*"
+    for T in $TARGETS; do virsh start `_domname $T`; done
+    return 0
+}
+
+function pput() {
+    [ $# -ne 2 ] && _die "pput needs src \& dest"
+    for T in $DALI_ORIGINAL $DALI_CLONES; do scp $1 "`_domname $T`:$2"; done
+    return $?
+}
+
+function pssh() {
+    [ $# -eq 0 ] && _die "pssh needs a command"
+    ALL=
+    for H in $DALI_ORIGINAL $DALI_CLONES; do ALL="-H `_domname $H` $ALL"; done
+    parallel-ssh $ALL -t0 -p40 -i $*
+    return $?
+}
+
+function shutdown() {
+    [ $# -eq 0 ] && _die "shutdown needs at least one argument"
+    [ $1 = ALL ] && pssh "shutdown -h 0" && return 0
+    for T in $*; do ssh `_domname $T` shutdown -h 0; done
+    return 0
+}
+
+###########################################################################
+# Some envars are required, some are calculated, and a directive is needed.
+# Do some idiot checking, too.
+
+# DO NOT CREATE FUNCTIONS THAT MASK SYSTEM OR BASH COMMANDS OR
+# THEY WILL BE MASKED!!!!  ie, "function rm ()" was a bad idea :-)
+
+function _envars_and_cmdline() {
+    # Determine legal set of functions: those that don't start with _.
+    # Separate with colon as Laplace transform and chomp the final.  Saved
+    # as global for usage().
+
+    T=`typeset -f | awk '/^[^_].+ \(\) / {print $1}' | tr '\n' ':'`
+    _LEGALDIRECTIVES="${T::-1}"
+
+    BAD=0
+    for REQ in DALI_DIR DALI_TAG; do
+	[ -z "${!REQ}" ] && echo You forgot to set $REQ >&2 && let BAD=$BAD+1
+    done
+    [ ! -d "$DALI_DIR" ] && _die Directory ${DALI_DIR} does not exist.
+
+    # Run from the git location.  
+    for D in homedir; do
+    	[ ! -d $D ] && echo Cannot see directory $D >&2 && let BAD=$BAD+1
+    done
+    [ $BAD -gt 0 ] && exit 1
+
+    export DALI_NETWORK=${DALI_NETWORK:-$DALI_TAG}
+
+    # Is the directive valid (ie, is there a function by that name)?
+    [ $# -eq 0 -o "$1" = "-?" ] && _usage
+    [[ ":$_LEGALDIRECTIVES:" = *:$1:* ]] || _usage	# Stolen from web
+
+    export http_proxy=${http_proxy:-}	# before the set -u
+    set -u
+
+    # For posterity.
+    ENV="$DALI_DIR/${DALI_TAG}_env.sh"
+    rm -f $ENV
+    env | grep DALI | sort | tr '\=' ' ' | while read VAR VAL; do
+	echo "export $VAR=\"$VAL\""
+    done >> $ENV
+    echo "export http_proxy=$http_proxy" >> $ENV
+    [ "$DALI_VERBOSE" -gt 0 ] && cat $ENV
+
+    return 0
+}
+
+###########################################################################
+# MAIN
+
+DIRECTIVE=$1			# Might be NULL
+shift
+_envars_and_cmdline $DIRECTIVE
+
+sudo echo	# Need it sooner or later
+
+$DIRECTIVE $* || _die $DIRECTIVE failed
+
+exit 0

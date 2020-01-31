@@ -1,0 +1,16 @@
+<network connections='7'>
+  <name>gfs2</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='gfs2' stp='off' delay='0'/>
+  <domain name='gfs2' localOnly='yes'/>
+  <ip address='192.168.6.254' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.6.1' end='192.168.6.20'/>
+    </dhcp>
+  </ip>
+</network>
+

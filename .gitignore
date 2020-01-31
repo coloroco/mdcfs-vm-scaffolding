@@ -1,0 +1,13 @@
+
+# In those directories
+FAM
+preseed.cfg
+
+# Created by dali
+*_env.sh
+
+*.img
+.*.swp
+*.pyc
+*.qcow2
+junk

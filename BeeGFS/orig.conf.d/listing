@@ -1,0 +1,13 @@
+[1] 11:02:08 [SUCCESS] bgstorage
+/etc/beegfs/beegfs-storage.conf
+[2] 11:02:08 [SUCCESS] bgadmon
+/etc/beegfs/beegfs-admon.conf
+[3] 11:02:08 [SUCCESS] bgmgmtd
+/etc/beegfs/beegfs-mgmtd.conf
+[4] 11:02:08 [SUCCESS] bgmeta
+/etc/beegfs/beegfs-meta.conf
+[5] 11:02:08 [SUCCESS] bgclient
+/etc/beegfs/beegfs-client-autobuild.conf
+/etc/beegfs/beegfs-client.conf
+/etc/beegfs/beegfs-helperd.conf
+/etc/beegfs/beegfs-mounts.conf

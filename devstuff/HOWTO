@@ -1,0 +1,63 @@
+0. Packages and prep #######################################################
+
+Install libvirt-bin, libvirt-clients, qemu-kvm, qemu-system, qemu-utils
+
+Insure your userid is in groups libvirt, libvirt-qemu, and kvm
+
+export LIBVIRT_DEFAULT_URI=qemu:///system
+export DALI_DIR=somewhere		# An existing directory
+export DALI_TAG=something		# "bg" for work on BeeGFS
+export DALI_ORIGINAL=a			# Clones will be xxxxa, xxxxb, ...
+
+export ORIGDOM=${BASE}${SUFFIX}		# "DOMain", the libvirt term for a VM
+export ORIGQCOW2=${ORIG}.qcow2
+export ORIGBLOCK=block{$SUFFIX}.img
+
+1. Virtual NAT network #####################################################
+
+Pick a network name, the TAG name is your best bet.
+$ export DALI_NETWORK=DALI_TAG
+
+Start with the predefined "default" network:
+$ virsh net-dumpxml default > ${DALI_NETWORK}_net.xml
+
+Edit this file, remove the UUID line, and change "default" to $DALI_NETWORK.
+Pick a new DHCP range.  Use Class C and .254 for the NAT bridge itself.
+Turn STP off.  After editing,
+
+$ virsh net-define ${DALI_NETWORK}_net.xml
+$ virsh net-autostart $DALI_NETWORK
+$ virsh net-start $DALI_NETWORK
+
+2. The first node ############################################################
+
+qemu-img create -f qcow2 $ORIGQCOW2 4G
+
+fallocate -l 128M $ORIGBLOCK
+
+INSTALLER=http://ftp.us.debian.org/debian/dists/buster/main/installer-amd64/
+VARIANT=debiantesting	# see output of "osinfo-query os"
+export INSTALLER VARIANT
+
+virt-install --name $ORIGDOM --virt-type kvm --vcpus 2 --ram 1024 \
+	--disk path=$ORIGQCOW2 --disk path=$ORIGBLOCK,format=raw \
+	--network network=$NET --location $INSTALLER \
+	--os-type linux --os-variant $VARIANT \
+	--graphics spice --video qxl --channel spicevmc
+
+Log in and extend/customize (add sudo, vim, build-essential, /root/.ssh, ...)
+for things you want on all nodes.
+
+3. Cloning nodes #############################################################
+
+for SUFFIX in b c d; do
+	CLONE=$BASE$SUFFIX
+	QCOW2=${CLONE}.qcow2
+	BLOCK=block${SUFFIX}.img
+	# virt-clone walks domain disks in listed order (virsh dumpxml xxxxa)
+	# as source for the new copies.
+	virt-clone -o $ORIG -n $CLONE -f $QCOW2 -f $BLOCK
+	sudo chmod +r $QCOW2 $BLOCK
+	sudo virt-sysprep -d $CLONE \
+		--operations dhcp-client-state,customize --hostname $CLONE
+done

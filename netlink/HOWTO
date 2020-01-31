@@ -1,0 +1,30 @@
+
+scp dotconfig.kvm zak1:
+
+ssh zak1
+
+apt-get install bc bison flex libelf-dev libssl-dev
+
+mkdir github
+
+cd github
+
+time git clone https://github.com/linux-genz/linux
+
+cd linux
+
+make mrproper
+
+cp ~/dotconfig.kvm .config
+
+make oldconfig
+
+make -j8	# does "all" which includes "modules" and "bzImage"
+
+make modules_install
+
+make install
+
+shutdown -r 0
+
+

@@ -1,0 +1,37 @@
+# This template assumes 3 systems per GFS2.seed.sh.  Otherwise have fun :-)
+
+totem {
+       version: 2
+       secauth: off
+       cluster_name: gfs2cluster
+}
+
+# Man page claims hostnames are ok but I couldn't get them to work.
+# I suspect each node gets the localhost address when looking at itself.
+
+nodelist {
+       node {
+	       nodeid: 1
+	       name: gfs2a
+	       ring0_addr: 192.168.w.xxx
+       }
+       node {
+	       nodeid: 2
+	       name: gfs2b
+	       ring0_addr: 192.168.w.yyy
+       }
+       node {
+	       nodeid: 3
+	       name: gfs2c
+	       ring0_addr: 192.168.w.zzz
+       }
+}
+
+quorum {
+       provider: corosync_votequorum
+#       two_node: 1
+}
+
+logging {
+       to_syslog: yes
+}

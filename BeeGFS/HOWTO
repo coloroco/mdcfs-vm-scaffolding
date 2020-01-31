@@ -1,0 +1,73 @@
+https://www.beegfs.io/wiki/ManualInstallWalkThrough
+https://www.beegfs.io/wiki/DownloadInstallationPackages
+
+1. Names taken from packages installed on each VM.
+
+export DALI_DIR=BeeGFS
+export DALI_TAG=bg
+export DALI_ORIGINAL=mgmtd
+export DALI_CLONES="meta storage client admon"
+
+Set up network "bg" per other instructions.  Then put that IP address in as
+first "nameserver" line in /etc/resolv.conf and lock the file.
+
+2. dali.sh original
+
+Takes six minutes from seedy.
+
+===========================================================================
+3. Configure original for BeeGFS repo but install nothing yet
+
+virsh start bgmgmtd
+ssh bgmgmtd
+wget -O /etc/apt/sources.list.d/BeeGFS.list https://www.beegfs.io/release/latest-stable/dists/beegfs-deb9.list
+wget -q https://www.beegfs.io/release/latest-stable/gpg/DEB-GPG-KEY-beegfs -O- | apt-key add -
+apt-get update
+shutdown -h 0
+
+===========================================================================
+4. dali.sh clones
+
+===========================================================================
+5. start them all, wait for name resolution
+
+for d in $DALI_ORIGINAL $DALI_CLONES; do virsh start $DALI_TAG$d; done
+
+host bgmgmtd
+
+===========================================================================
+5. Install appropriate packages on each
+
+ssh bgmgmtd DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-mgmtd
+
+ssh bgmgmtd DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-utils
+
+ssh bgmeta DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-meta
+
+ssh bgstorage DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-storage
+
+ssh bgclient DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-client
+
+ssh bgclient DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-helperd
+
+ssh bgadmon DEBIAN_FRONTEND=noninteractive apt-get install -y beegfs-admon openjdk-11-jre-headless
+
+===========================================================================
+6. Config files and subdirs on most VMs
+https://www.beegfs.io/wiki/BasicConfigurationFirstStartup
+
+bgVM	File in /etc/beegfs	Parameter		Value
+--------------------------------------------------------------------------
+mgmtd	beegfs-mgmtd.conf	storeMgmtDirectory	/data/beegfs-mgmtd
+
+meta	beegfs-meta.conf	sysMgmtdHost		bgmgmtd
+				storeMetaDirectory	/data/beegfs-meta
+
+storage	beefs-storage.conf	sysMgmtdHost		bgmgmtd
+				storeStorageDirectory	/data/beegfs-storage
+
+admon	beegfs-meta.conf	sysMgmtdHost		bgmgmtd
+
+client	beegfs-client.conf	sysMgmtdHost		bgmgmtd
+	beegfs-mount.conf	default settings are ok, /mnt is handled
+
